@@ -6,5 +6,6 @@ pub mod day5;
 pub mod day6;
 pub mod day7part1;
 pub mod day7part2;
+pub mod day8;
 
 aoc_runner_derive::aoc_lib! { year = 2023 }
