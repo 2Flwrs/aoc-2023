@@ -19,13 +19,12 @@ impl Pos {
             Dir::E => Pos(self.0 + 1, self.1),
             Dir::W => Pos(self.0 - 1, self.1),
         };
-        // println!("mv {self:?} {d:?} -> {result:?}");
         result
     }
 }
 
 impl Map {
-    fn find_start(&self) -> Pos {
+    fn find_start(&self) -> (Pos, Tile) {
         if let Some((y, Some(x))) = self
             .0
             .iter()
@@ -36,7 +35,19 @@ impl Map {
             })
             .find_position(|vv| vv.is_some())
         {
-            Pos(x as isize, y as isize)
+            let s = Pos(x as isize, y as isize);
+            let dirs = Dir::ALL
+                .iter()
+                .filter(|&d| {
+                    self.get(s.mv(d))
+                        .and_then(|t| t.traverse(d.inv()))
+                        .is_some()
+                })
+                .cloned()
+                .collect_vec();
+            assert_eq!(dirs.len(), 2);
+            let t = Tile::from_directions((dirs[0], dirs[1]));
+            (s, t)
         } else {
             panic!("missing start")
         }
@@ -53,13 +64,29 @@ impl Map {
         }
         Some(self.0[y][x])
     }
+
+    fn width(&self) -> usize {
+        self.0[0].len()
+    }
+
+    fn height(&self) -> usize {
+        self.0.len()
+    }
+
+    fn new(width: usize, height: usize) -> Self {
+        Self(vec![vec![Tile::Ground; width]; height])
+    }
+
+    fn put(&mut self, pos: Pos, tile: Tile) {
+        let (x, y) = (pos.0 as usize, pos.1 as usize);
+        self.0[y][x] = tile;
+    }
 }
 
 impl std::str::FromStr for Map {
     type Err = eyre::Report;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // println!("map:\n{s}\n");
         let d = s
             .lines()
             .map(|l| {
@@ -129,12 +156,76 @@ impl Tile {
         result
     }
 
+    fn from_directions(pair: (Dir, Dir)) -> Self {
+        let mut v = vec![pair.0, pair.1];
+        v.sort();
+        match (v[0], v[1]) {
+            (Dir::N, Dir::S) => Tile::NS,
+            (Dir::N, Dir::E) => Tile::NE,
+            (Dir::N, Dir::W) => Tile::NW,
+            (Dir::S, Dir::E) => Tile::SE,
+            (Dir::S, Dir::W) => Tile::SW,
+            (Dir::E, Dir::W) => Tile::EW,
+            _ => panic!(),
+        }
+    }
+
+    fn dirs(&self) -> (Dir, Dir) {
+        match self {
+            Tile::NS => (Dir::N, Dir::S),
+            Tile::EW => (Dir::E, Dir::W),
+            Tile::NE => (Dir::N, Dir::E),
+            Tile::NW => (Dir::N, Dir::W),
+            Tile::SW => (Dir::S, Dir::W),
+            Tile::SE => (Dir::S, Dir::E),
+            Tile::Ground => panic!(),
+            Tile::Start => panic!(),
+        }
+    }
+
     fn is_start(&self) -> bool {
         matches!(self, Self::Start)
     }
+
+    fn inout(&self, i: InOut) -> InOut {
+        let (t, b) = (i.2, i.3);
+
+        let (tr, br) = match (t, b) {
+            (true, true) => match &self {
+                Tile::NS => (false, false),
+                Tile::NE => (false, true),
+                Tile::SE => (true, false),
+                Tile::Ground => (true, true),
+                _ => panic!(),
+            },
+            (true, false) => match &self {
+                Tile::EW => (true, false),
+                Tile::NW => (false, false),
+                Tile::SW => (true, true),
+                _ => panic!(),
+            },
+            (false, true) => match &self {
+                Tile::EW => (false, true),
+                Tile::NW => (true, true),
+                Tile::SW => (false, false),
+                _ => panic!(),
+            },
+            (false, false) => match &self {
+                Tile::NS => (true, true),
+                Tile::NE => (true, false),
+                Tile::SE => (false, true),
+                Tile::Ground => (false, false),
+                _ => {
+                    panic!("Bad combo {} {} {}", t, b, self)
+                }
+            },
+        };
+
+        InOut(t, b, tr, br)
+    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Dir {
     N,
     S,
@@ -154,6 +245,21 @@ impl Dir {
     }
 }
 
+/// InOut
+///
+/// (NW, SW, NE, SE)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InOut(bool, bool, bool, bool);
+
+impl InOut {
+    fn new() -> Self {
+        Self(false, false, false, false)
+    }
+    fn all_inside(&self) -> bool {
+        matches!(self, Self(true, true, true, true))
+    }
+}
+
 #[aoc_generator(day10)]
 fn gen(input: &str) -> eyre::Result<Map> {
     Ok(input.parse()?)
@@ -161,15 +267,9 @@ fn gen(input: &str) -> eyre::Result<Map> {
 
 #[aoc(day10, part1)]
 fn part1(map: &Map) -> eyre::Result<usize> {
-    let s = map.find_start();
-    // println!("start: {s:?}");
-    let start_directions = Dir::ALL
-        .iter()
-        .filter(|&d| map.get(s.mv(d)).and_then(|t| t.traverse(d.inv())).is_some())
-        .cloned()
-        .collect_vec();
-    assert_eq!(start_directions.len(), 2);
-    let mut v = [(s, start_directions[0]), (s, start_directions[1])];
+    let (s, t) = map.find_start();
+    let dirs = t.dirs();
+    let mut v = [(s, dirs.0), (s, dirs.1)];
 
     // println!("=== starting traversal ===");
     for i in 1.. {
@@ -192,12 +292,55 @@ fn part1(map: &Map) -> eyre::Result<usize> {
     unreachable!()
 }
 
+#[aoc(day10, part2)]
+fn part2(map: &Map) -> eyre::Result<usize> {
+    let (s, t) = map.find_start();
+    let mut m = Map::new(map.width(), map.height());
+    m.put(s, t);
+
+    let dirs = t.dirs();
+    let mut v = [(s, dirs.0), (s, dirs.1)];
+    loop {
+        for x in &mut v {
+            let (pos, dir) = *x;
+            let new_pos = pos.mv(dir);
+            let t = map
+                .get(new_pos)
+                .ok_or_else(|| eyre::eyre!("outside of map"))?;
+            m.put(new_pos, t);
+            let new_dir = t
+                .traverse(dir.inv())
+                .ok_or_else(|| eyre::eyre!("bad traverse"))?;
+            *x = (new_pos, new_dir);
+        }
+        if v[0].0 == v[1].0 {
+            break;
+        }
+    }
+
+    let mut count = 0;
+    for line in m.0 {
+        let mut i = InOut::new();
+        for tile in line {
+            let j = tile.inout(i);
+            i = j;
+            if i.all_inside() {
+                count += 1;
+            }
+        }
+    }
+
+    Ok(count)
+}
+
 #[cfg(test)]
 mod test {
     use eyre::Result;
 
     const EX1: &str = include_str!("../input/2023/day10-ex1.txt");
     const EX2: &str = include_str!("../input/2023/day10-ex2.txt");
+    const EX3: &str = include_str!("../input/2023/day10-ex3.txt");
+    const EX4: &str = include_str!("../input/2023/day10-ex4.txt");
 
     #[test]
     fn parse_test() -> Result<()> {
@@ -210,6 +353,18 @@ mod test {
     fn p1() -> Result<()> {
         assert_eq!(super::part1(&super::gen(EX1)?)?, 4);
         assert_eq!(super::part1(&super::gen(EX2)?)?, 8);
+        Ok(())
+    }
+
+    #[test]
+    fn p2a() -> Result<()> {
+        assert_eq!(super::part2(&super::gen(EX3)?)?, 4);
+        Ok(())
+    }
+
+    #[test]
+    fn p2b() -> Result<()> {
+        assert_eq!(super::part2(&super::gen(EX4)?)?, 10);
         Ok(())
     }
 }
